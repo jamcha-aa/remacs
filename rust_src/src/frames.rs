@@ -16,10 +16,13 @@ use crate::{
 };
 
 #[cfg(feature = "window-system")]
-use crate::remacs_sys::{vertical_scroll_bar_type, x_focus_frame, Fnreverse};
+use crate::{
+    fns::nreverse,
+    remacs_sys::{vertical_scroll_bar_type, x_focus_frame},
+};
 
 #[cfg(not(feature = "window-system"))]
-use crate::remacs_sys::Fcopy_sequence;
+use crate::fns::copy_sequence;
 
 pub type LispFrameRef = ExternalPtr<Lisp_Frame>;
 
@@ -32,7 +35,7 @@ impl LispFrameRef {
     }
 
     // Awaiting Wilfred#1264
-    pub fn is_gui_window(self) -> bool {
+    pub const fn is_gui_window(self) -> bool {
         cfg!(feature = "window_system")
     }
 
@@ -185,7 +188,7 @@ pub struct LispFrameLiveOrSelected(LispFrameRef);
 
 impl From<LispObject> for LispFrameLiveOrSelected {
     fn from(obj: LispObject) -> Self {
-        LispFrameLiveOrSelected(obj.map_or_else(selected_frame, LispObject::as_live_frame_or_error))
+        Self(obj.map_or_else(selected_frame, LispObject::as_live_frame_or_error))
     }
 }
 
@@ -647,11 +650,11 @@ pub fn frame_list() -> LispObject {
     {
         let list = filter_frame_list(|f| !f.has_tooltip());
         // Reverse list for consistency with the !HAVE_WINDOW_SYSTEM case.
-        unsafe { Fnreverse(list) }
+        nreverse(list)
     }
     #[cfg(not(feature = "window-system"))]
     {
-        unsafe { Fcopy_sequence(Vframe_list) }
+        copy_sequence(unsafe { Vframe_list })
     }
 }
 

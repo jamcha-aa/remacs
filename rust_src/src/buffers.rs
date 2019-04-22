@@ -17,6 +17,7 @@ use crate::{
     editfns::{point, widen},
     eval::unbind_to,
     fileio::{expand_file_name, find_file_name_handler},
+    fns::{copy_sequence, nconc, nreverse},
     frames::LispFrameRef,
     hashtable::LispHashTableRef,
     lisp::{ExternalPtr, LispMiscRef, LispObject, LispStructuralEqual, LiveBufferIter},
@@ -29,17 +30,18 @@ use crate::{
     },
     multibyte::{multibyte_chars_in_text, multibyte_length_by_head, string_char},
     multibyte::{LispStringRef, LispSymbolOrString},
-    numbers::MOST_POSITIVE_FIXNUM,
+    numbers::{LispNumber, MOST_POSITIVE_FIXNUM},
     obarray::intern,
     remacs_sys::symbol_trapped_write::SYMBOL_TRAPPED_WRITE,
+    remacs_sys::Fmake_marker,
     remacs_sys::{
         alloc_buffer_text, allocate_buffer, allocate_misc, block_input, bset_update_mode_line,
         buffer_fundamental_string, buffer_local_flags, buffer_local_value, buffer_memory_full,
-        buffer_window_count, concat2, del_range, delete_all_overlays, globals, last_per_buffer_idx,
-        lookup_char_property, make_timespec, marker_position, modify_overlay, nconc2,
-        notify_variable_watchers, per_buffer_default, set_buffer_internal_1, set_per_buffer_value,
-        specbind, unblock_input, unchain_both, unchain_marker, update_mode_lines,
-        windows_or_buffers_changed,
+        buffer_window_count, del_range, delete_all_overlays, globals, last_per_buffer_idx,
+        lookup_char_property, make_timespec, marker_position, modify_overlay,
+        notify_variable_watchers, per_buffer_default, recenter_overlay_lists,
+        set_buffer_internal_1, set_per_buffer_value, specbind, unblock_input, unchain_both,
+        unchain_marker, update_mode_lines, windows_or_buffers_changed,
     },
     remacs_sys::{
         buffer_defaults, equal_kind, pvec_type, EmacsInt, Lisp_Buffer, Lisp_Buffer_Local_Value,
@@ -51,9 +53,10 @@ use crate::{
         Qinhibit_read_only, Qmakunbound, Qnil, Qoverlayp, Qpermanent_local, Qpermanent_local_hook,
         Qt, Qunbound, UNKNOWN_MODTIME_NSECS,
     },
-    remacs_sys::{Fcopy_sequence, Fget_text_property, Fmake_marker, Fnconc, Fnreverse},
     strings::string_equal,
+    textprop::get_text_property,
     threads::{c_specpdl_index, ThreadState},
+    util::clip_to_bounds,
     vectors::LispVectorlikeRef,
 };
 
@@ -111,7 +114,7 @@ pub type LispBufferRef = ExternalPtr<Lisp_Buffer>;
 pub type LispOverlayRef = ExternalPtr<Lisp_Overlay>;
 
 impl LispBufferRef {
-    pub fn create_new(name: LispStringRef) -> LispBufferRef {
+    pub fn create_new(name: LispStringRef) -> Self {
         if name.is_empty() {
             error!("Empty string for buffer name is not allowed");
         }
@@ -173,7 +176,7 @@ impl LispBufferRef {
         b.begv_marker_ = Qnil;
         b.zv_marker_ = Qnil;
 
-        let mut name: LispStringRef = unsafe { Fcopy_sequence(name.into()) }.force_string();
+        let mut name: LispStringRef = copy_sequence(name.into()).force_string();
         name.set_intervals(ptr::null_mut());
         b.name_ = name.into();
         b.undo_list_ = if name.byte_at(0) != b' ' { Qnil } else { Qt };
@@ -187,7 +190,7 @@ impl LispBufferRef {
         // Add the buffer to the alist of live buffers
         let buffer: LispObject = b.into();
         unsafe {
-            Vbuffer_alist = nconc2(Vbuffer_alist, list!((name, buffer)));
+            Vbuffer_alist = nconc(&mut [Vbuffer_alist, list!((name, buffer))]);
             if Vrun_hooks.is_not_nil() {
                 call!(Vrun_hooks, Qbuffer_list_update_hook);
             }
@@ -199,11 +202,11 @@ impl LispBufferRef {
         self.read_only_.into()
     }
 
-    pub fn beg(self) -> ptrdiff_t {
+    pub const fn beg(self) -> ptrdiff_t {
         BEG
     }
 
-    pub fn beg_byte(self) -> ptrdiff_t {
+    pub const fn beg_byte(self) -> ptrdiff_t {
         BEG_BYTE
     }
 
@@ -260,7 +263,7 @@ impl LispBufferRef {
         self.filename_
     }
 
-    pub fn base_buffer(self) -> Option<LispBufferRef> {
+    pub fn base_buffer(self) -> Option<Self> {
         Self::from_ptr(self.base_buffer as *mut c_void)
     }
 
@@ -723,7 +726,7 @@ impl LispBufferRef {
         unsafe { self.overlays_after.as_ref().map(|m| mem::transmute(m)) }
     }
 
-    pub fn as_live(self) -> Option<LispBufferRef> {
+    pub fn as_live(self) -> Option<Self> {
         if self.is_live() {
             Some(self)
         } else {
@@ -815,7 +818,7 @@ impl LispBufferRef {
         } else {
             let mut last = Qnil;
             for tail in self.local_vars_tails_iter() {
-                let (local, _) = tail.car().into();
+                let (local, list) = tail.car().into();
                 let prop = lists::get(local.force_symbol(), Qpermanent_local);
                 // If permanent-local, keep it.
                 if prop.is_not_nil() {
@@ -823,15 +826,10 @@ impl LispBufferRef {
                     if prop == Qpermanent_local_hook {
                         // This is a partially permanent hook variable.
                         // Preserve only the elements that want to be preserved.
-                        let (_, list) = tail.car().into();
                         let newlist = match list.as_cons() {
                             None => list,
-                            Some(cons) => unsafe {
-                                Fnreverse(
-                                    cons.iter_cars(
-                                        LispConsEndChecks::off,
-                                        LispConsCircularChecks::on,
-                                    )
+                            Some(cons) => nreverse(
+                                cons.iter_cars(LispConsEndChecks::off, LispConsCircularChecks::on)
                                     .filter(|elt| {
                                         !elt.is_symbol()
                                             || elt.is_t()
@@ -839,8 +837,7 @@ impl LispBufferRef {
                                                 .is_not_nil()
                                     })
                                     .fold(Qnil, |new, elt| (elt, new).into()),
-                                )
-                            },
+                            ),
                         };
                         if local.force_symbol().get_trapped_write() == SYMBOL_TRAPPED_WRITE {
                             unsafe {
@@ -1049,9 +1046,9 @@ impl From<LispBufferOrName> for LispObject {
 impl From<LispObject> for LispBufferOrName {
     fn from(v: LispObject) -> Self {
         if let Some(s) = v.as_string() {
-            LispBufferOrName::Name(s)
+            Self::Name(s)
         } else if let Some(b) = v.as_buffer() {
-            LispBufferOrName::Buffer(b)
+            Self::Buffer(b)
         } else {
             wrong_type!(Qbufferp, v);
         }
@@ -1061,14 +1058,14 @@ impl From<LispObject> for LispBufferOrName {
 impl From<LispBufferRef> for LispBufferOrName {
     #[inline(always)]
     fn from(b: LispBufferRef) -> Self {
-        LispBufferOrName::Buffer(b)
+        Self::Buffer(b)
     }
 }
 
 impl From<LispStringRef> for LispBufferOrName {
     #[inline(always)]
     fn from(n: LispStringRef) -> Self {
-        LispBufferOrName::Name(n)
+        Self::Name(n)
     }
 }
 
@@ -1103,7 +1100,7 @@ impl From<LispBufferOrName> for Option<LispBufferRef> {
 
 impl From<LispBufferOrName> for LispBufferRef {
     fn from(v: LispBufferOrName) -> Self {
-        Option::<LispBufferRef>::from(v).unwrap_or_else(|| nsberror(v.into()))
+        Option::<Self>::from(v).unwrap_or_else(|| nsberror(v.into()))
     }
 }
 
@@ -1124,8 +1121,8 @@ pub enum LispBufferOrCurrent {
 impl From<LispObject> for LispBufferOrCurrent {
     fn from(obj: LispObject) -> Self {
         match obj.as_buffer() {
-            None => LispBufferOrCurrent::Current,
-            Some(buf) => LispBufferOrCurrent::Buffer(buf),
+            None => Self::Current,
+            Some(buf) => Self::Buffer(buf),
         }
     }
 }
@@ -1174,13 +1171,13 @@ pub fn buffer_list(frame: Option<LispFrameRef>) -> LispObject {
         None => list(&buffers),
 
         Some(frame) => {
-            let framelist = unsafe { Fcopy_sequence(frame.buffer_list) };
-            let prevlist = unsafe { Fnreverse(Fcopy_sequence(frame.buried_buffer_list)) };
+            let framelist = copy_sequence(frame.buffer_list);
+            let prevlist = nreverse(copy_sequence(frame.buried_buffer_list));
 
             // Remove any buffer that duplicates one in FRAMELIST or PREVLIST.
             buffers.retain(|e| member(*e, framelist).is_nil() && member(*e, prevlist).is_nil());
 
-            callN_raw!(Fnconc, framelist, list(&buffers), prevlist)
+            nconc(&mut [framelist, list(&buffers), prevlist])
         }
     }
 }
@@ -1307,7 +1304,7 @@ pub fn overlay_buffer(overlay: LispOverlayRef) -> Option<LispBufferRef> {
 /// effect on OVERLAY.
 #[lisp_fn]
 pub fn overlay_properties(overlay: LispOverlayRef) -> LispObject {
-    unsafe { Fcopy_sequence(overlay.plist) }
+    copy_sequence(overlay.plist)
 }
 
 #[no_mangle]
@@ -1361,7 +1358,7 @@ pub fn barf_if_buffer_read_only(position: Option<EmacsInt>) {
     let pos = position.unwrap_or_else(point);
 
     let inhibit_read_only: bool = unsafe { globals.Vinhibit_read_only.into() };
-    let prop = unsafe { Fget_text_property(pos.into(), Qinhibit_read_only, Qnil) };
+    let prop = get_text_property(pos.into(), Qinhibit_read_only, Qnil);
 
     if ThreadState::current_buffer_unchecked().is_read_only() && !inhibit_read_only && prop.is_nil()
     {
@@ -1394,7 +1391,7 @@ pub fn overlay_lists() -> LispObject {
     let cur_buf = ThreadState::current_buffer_unchecked();
     let before = cur_buf.overlays_before().map_or(Qnil, &list_overlays);
     let after = cur_buf.overlays_after().map_or(Qnil, &list_overlays);
-    unsafe { (Fnreverse(before), Fnreverse(after)).into() }
+    (nreverse(before), nreverse(after)).into()
 }
 
 fn get_truename_buffer_1(filename: LispSymbolOrString) -> LispObject {
@@ -1404,6 +1401,17 @@ fn get_truename_buffer_1(filename: LispSymbolOrString) -> LispObject {
             buf_truename.is_string() && string_equal(buf_truename, filename)
         })
         .into()
+}
+
+/// Recenter the overlays of the current buffer around position POS.
+/// That makes overlay lookup faster for positions near POS (but perhaps slower
+/// for positions far away from POS).
+#[lisp_fn]
+pub fn overlay_recenter(pos: LispNumber) {
+    let p = clip_to_bounds(std::isize::MIN, pos.to_fixnum(), std::isize::MAX);
+    unsafe {
+        recenter_overlay_lists(ThreadState::current_buffer_unchecked().as_mut(), p);
+    }
 }
 
 #[no_mangle]
@@ -1649,7 +1657,7 @@ pub fn generate_new_buffer_name(name: LispStringRef, ignore: LispObject) -> Lisp
     let basename = if name.byte_at(0) == b' ' {
         let mut s = format!("-{}", thread_rng().gen_range(0, 1_000_000));
         local_unibyte_string!(suffix, s);
-        let genname = unsafe { concat2(name.into(), suffix) };
+        let genname = lisp_concat!(name, suffix);
         if get_buffer(genname.into()).is_none() {
             return genname.into();
         }
@@ -1662,7 +1670,7 @@ pub fn generate_new_buffer_name(name: LispStringRef, ignore: LispObject) -> Lisp
     loop {
         let mut s = format!("<{}>", suffix_count);
         local_unibyte_string!(suffix, s);
-        let candidate = unsafe { concat2(basename, suffix) }.force_string();
+        let candidate = lisp_concat!(basename, suffix).force_string();
         if string_equal(candidate, ignore) || get_buffer(candidate.into()).is_none() {
             return candidate;
         }
@@ -1720,7 +1728,7 @@ pub unsafe extern "C" fn copy_overlays(
         let end = duplicate_marker(overlay.end);
 
         let mut overlay_new: LispOverlayRef =
-            build_overlay(start, end, Fcopy_sequence(overlay.plist)).into();
+            build_overlay(start, end, copy_sequence(overlay.plist)).into();
 
         match tail {
             Some(mut tail_ref) => tail_ref.next = overlay_new.as_mut(),

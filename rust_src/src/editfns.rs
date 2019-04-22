@@ -15,6 +15,7 @@ use crate::{
     buffers::{LispBufferOrCurrent, LispBufferOrName, LispBufferRef, BUF_BYTES_MAX},
     character::{char_head_p, dec_pos},
     eval::{progn, record_unwind_protect, unbind_to},
+    fns::copy_sequence,
     indent::invalidate_current_column,
     lisp::LispObject,
     marker::{marker_position_lisp, point_marker, set_point_from_marker},
@@ -36,7 +37,7 @@ use crate::{
         update_buffer_properties, update_compositions, CHECK_BORDER, STRING_BYTES,
     },
     remacs_sys::{
-        Fadd_text_properties, Fcopy_sequence, Fget_pos_property, Fnext_single_char_property_change,
+        Fadd_text_properties, Fget_pos_property, Fnext_single_char_property_change,
         Fprevious_single_char_property_change, Fx_popup_dialog,
     },
     remacs_sys::{
@@ -421,7 +422,7 @@ pub fn propertize(args: &[LispObject]) -> LispObject {
     let first = it.next().unwrap();
     let orig_string = LispStringRef::from(*first);
 
-    let copy = unsafe { Fcopy_sequence(*first) };
+    let copy = copy_sequence(*first);
 
     let mut properties = Qnil;
 
@@ -638,11 +639,11 @@ pub fn constrain_to_field(
     if unsafe { globals.Vinhibit_field_text_motion.is_nil() }
         && new_pos != old_pos
         && (get_char_property(
-            new_pos,
+            new_pos.into (),
             Qfield,
             Qnil).is_not_nil()
             || get_char_property(
-                old_pos,
+                old_pos.into (),
                 Qfield,
                 Qnil).is_not_nil()
             // To recognize field boundaries, we must also look at the
@@ -651,11 +652,11 @@ pub fn constrain_to_field(
             // fields (like comint prompts).
             || (new_pos > begv
                 && get_char_property(
-                    prev_new,
+                    prev_new.into (),
                     Qfield,
                     Qnil).is_not_nil())
             || (old_pos > begv
-                && get_char_property(prev_old, Qfield, Qnil).is_not_nil()))
+                && get_char_property(prev_old.into (), Qfield, Qnil).is_not_nil()))
         && (inhibit_capture_property.is_nil()
             // Field boundaries are again a problem; but now we must
             // decide the case exactly, so we need to call
@@ -668,11 +669,11 @@ pub fn constrain_to_field(
             }
                 && (old_pos <= begv
                     || get_char_property(
-                        old_pos,
+                        old_pos.into (),
                         inhibit_capture_property,
                         Qnil).is_nil()
                     || get_char_property(
-                        prev_old,
+                        prev_old.into (),
                         inhibit_capture_property,
                         Qnil).is_nil())))
     // It is possible that NEW_POS is not within the same field as
@@ -950,10 +951,7 @@ pub fn message_box(args: &mut [LispObject]) -> LispObject {
 /// usage: (message-or-box FORMAT-STRING &rest ARGS)
 #[lisp_fn(min = "1")]
 pub fn message_or_box(args: &mut [LispObject]) -> LispObject {
-    if unsafe {
-        (globals.last_nonmenu_event.is_nil() || globals.last_nonmenu_event.is_cons())
-            && globals.use_dialog_box
-    } {
+    if unsafe { globals.last_nonmenu_event.is_list() && globals.use_dialog_box } {
         message_box(args)
     } else {
         message(args)

@@ -190,7 +190,7 @@ impl LispStringRef {
 impl LispStructuralEqual for LispStringRef {
     fn equal(
         &self,
-        other: LispStringRef,
+        other: Self,
         kind: equal_kind::Type,
         _depth: i32,
         _ht: &mut LispHashTableRef,
@@ -258,7 +258,7 @@ impl<'a> Iterator for LispStringRefCharIterator<'a> {
 }
 
 impl LispStringRef {
-    pub fn char_indices(&self) -> LispStringRefIterator {
+    pub const fn char_indices(&self) -> LispStringRefIterator {
         LispStringRefIterator {
             string_ref: self,
             cur: 0,
@@ -273,7 +273,7 @@ impl LispStringRef {
 
 impl From<EmacsDouble> for LispObject {
     fn from(v: EmacsDouble) -> Self {
-        LispObject::from_float(v)
+        Self::from_float(v)
     }
 }
 
@@ -295,7 +295,7 @@ impl From<LispObject> for Option<LispStringRef> {
 
 impl From<LispStringRef> for LispObject {
     fn from(s: LispStringRef) -> Self {
-        LispObject::tag_ptr(s, Lisp_Type::Lisp_String)
+        Self::tag_ptr(s, Lisp_Type::Lisp_String)
     }
 }
 
@@ -402,18 +402,18 @@ impl From<LispObject> for LispSymbolOrString {
 
 impl PartialEq<LispObject> for LispSymbolOrString {
     fn eq(&self, other: &LispObject) -> bool {
-        (*other).eq(LispObject::from(*self))
+        (*other).eq(*self)
     }
 }
 
-pub fn is_ascii(c: Codepoint) -> bool {
+pub const fn is_ascii(c: Codepoint) -> bool {
     c < 0x80
 }
 
 /// Nonzero iff C is a character of code less than 0x100.
 ///
 /// Same as the `SINGLE_BYTE_CHAR_P` macro.
-pub fn is_single_byte_char(c: Codepoint) -> bool {
+pub const fn is_single_byte_char(c: Codepoint) -> bool {
     c < 0x100
 }
 
@@ -447,7 +447,7 @@ pub fn raw_byte_codepoint(byte: c_uchar) -> Codepoint {
 }
 
 /// Same as the `CHAR_TO_BYTE8` macro.
-pub fn raw_byte_from_codepoint(cp: Codepoint) -> c_uchar {
+pub const fn raw_byte_from_codepoint(cp: Codepoint) -> c_uchar {
     (cp - 0x3F_FF00) as c_uchar
 }
 
@@ -935,7 +935,7 @@ pub unsafe extern "C" fn str_to_unibyte(
     chars
 }
 
-pub fn char_byte8_p(c: Codepoint) -> bool {
+pub const fn char_byte8_p(c: Codepoint) -> bool {
     c > MAX_5_BYTE_CHAR
 }
 
@@ -947,6 +947,6 @@ pub fn char_to_byte8(c: Codepoint) -> u8 {
     }
 }
 
-pub fn single_byte_charp(c: Codepoint) -> bool {
+pub const fn single_byte_charp(c: Codepoint) -> bool {
     c < 0x100
 }

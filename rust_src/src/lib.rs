@@ -55,6 +55,8 @@ mod lisp;
 #[macro_use]
 mod frames;
 #[macro_use]
+mod strings;
+#[macro_use]
 mod vector_macros;
 mod str2sig;
 
@@ -111,7 +113,6 @@ mod profiler;
 #[allow(clippy::all)]
 mod remacs_sys;
 mod search;
-mod strings;
 mod symbols;
 mod syntax;
 mod terminal;
@@ -149,7 +150,7 @@ mod hacks {
 
     impl<T> Hack<T> {
         pub const unsafe fn uninitialized() -> Self {
-            Hack { u: () }
+            Self { u: () }
         }
 
         pub unsafe fn get_mut(&mut self) -> &mut T {

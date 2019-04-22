@@ -429,36 +429,6 @@ vertical combination.  */)
   return WINDOW_HORIZONTAL_COMBINATION_P (w) ? w->contents : Qnil;
 }
 
-DEFUN ("window-pixel-width-before-size-change",
-       Fwindow_pixel_width_before_size_change,
-       Swindow_pixel_width_before_size_change, 0, 1, 0,
-       doc: /* Return pixel width of window WINDOW before last size changes.
-WINDOW must be a valid window and defaults to the selected one.
-
-The return value is the pixel width of WINDOW at the last time
-`window-size-change-functions' was run.  It's zero if WINDOW was made
-after that.  */)
-  (Lisp_Object window)
-{
-  return (make_number
-	  (decode_valid_window (window)->pixel_width_before_size_change));
-}
-
-DEFUN ("window-pixel-height-before-size-change",
-       Fwindow_pixel_height_before_size_change,
-       Swindow_pixel_height_before_size_change, 0, 1, 0,
-       doc: /* Return pixel height of window WINDOW before last size changes.
-WINDOW must be a valid window and defaults to the selected one.
-
-The return value is the pixel height of WINDOW at the last time
-`window-size-change-functions' was run.  It's zero if WINDOW was made
-after that.  */)
-  (Lisp_Object window)
-{
-  return (make_number
-	  (decode_valid_window (window)->pixel_height_before_size_change));
-}
-
 DEFUN ("window-mode-line-height", Fwindow_mode_line_height,
        Swindow_mode_line_height, 0, 1, 0,
        doc: /* Return the height in pixels of WINDOW's mode-line.
@@ -511,44 +481,6 @@ WINDOW must be a live window and defaults to the selected one.  */)
   (Lisp_Object window)
 {
   return (make_number (WINDOW_SCROLL_BAR_AREA_HEIGHT (decode_live_window (window))));
-}
-
-/* Set W's horizontal scroll amount to HSCROLL clipped to a reasonable
-   range, returning the new amount as a fixnum.  */
-Lisp_Object
-set_window_hscroll (struct window *w, EMACS_INT hscroll)
-{
-  /* Horizontal scrolling has problems with large scroll amounts.
-     It's too slow with long lines, and even with small lines the
-     display can be messed up.  For now, though, impose only the limits
-     required by the internal representation: horizontal scrolling must
-     fit in fixnum (since it's visible to Elisp) and into ptrdiff_t
-     (since it's stored in a ptrdiff_t).  */
-  ptrdiff_t hscroll_max = min (MOST_POSITIVE_FIXNUM, PTRDIFF_MAX);
-  ptrdiff_t new_hscroll = clip_to_bounds (0, hscroll, hscroll_max);
-
-  /* Prevent redisplay shortcuts when changing the hscroll.  */
-  if (w->hscroll != new_hscroll)
-    XBUFFER (w->contents)->prevent_redisplay_optimizations_p = true;
-
-  w->hscroll = new_hscroll;
-  w->suspend_auto_hscroll = true;
-
-  return make_number (new_hscroll);
-}
-
-DEFUN ("set-window-hscroll", Fset_window_hscroll, Sset_window_hscroll, 2, 2, 0,
-       doc: /* Set number of columns WINDOW is scrolled from left margin to NCOL.
-WINDOW must be a live window and defaults to the selected one.
-Clip the number to a reasonable value if out of range.
-Return the new number.  NCOL should be zero or positive.
-
-Note that if `automatic-hscrolling' is non-nil, you cannot scroll the
-window so that the location of point moves off-window.  */)
-  (Lisp_Object window, Lisp_Object ncol)
-{
-  CHECK_NUMBER (ncol);
-  return set_window_hscroll (decode_live_window (window), XINT (ncol));
 }
 
 /* Test if the character at column X, row Y is within window W.
@@ -6271,13 +6203,10 @@ displayed after a scrolling operation to be somewhat inaccurate.  */);
   defsubr (&Spos_visible_in_window_p);
   defsubr (&Swindow_line_height);
   defsubr (&Swindow_left_child);
-  defsubr (&Swindow_pixel_width_before_size_change);
-  defsubr (&Swindow_pixel_height_before_size_change);
   defsubr (&Sset_window_new_pixel);
   defsubr (&Sset_window_new_normal);
   defsubr (&Swindow_resize_apply);
   defsubr (&Swindow_resize_apply_total);
-  defsubr (&Sset_window_hscroll);
   defsubr (&Swindow_mode_line_height);
   defsubr (&Swindow_header_line_height);
   defsubr (&Swindow_right_divider_width);
